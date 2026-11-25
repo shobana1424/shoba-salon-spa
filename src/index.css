@@ -1,0 +1,18 @@
+@tailwind base;@tailwind components;@tailwind utilities;
+html{font-size:14px;scroll-behavior:smooth}@media(min-width:1920px){html{font-size:16px}}
+body{font-family:Inter,sans-serif;background:#F8F4ED;color:#2A2229;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+.grid>*,.flex>*{min-width:0}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#C6A66B;border-radius:8px}::-webkit-scrollbar-track{background:#F4EBDD}
+img{max-width:100%}
+h1,h2,h3,.serif{font-family:'Playfair Display',serif}
+@layer components{
+.btn{@apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed}
+.btn-gold{@apply btn bg-gradient-to-r from-gold to-[#d9bd86] text-white shadow-md shadow-gold/30 hover:brightness-95}
+.btn-out{@apply btn border border-gold text-charcoal hover:bg-gold/10}
+.btn-dark{@apply btn bg-charcoal text-white hover:bg-black}
+.input{@apply w-full rounded-lg border border-beige bg-white px-3 py-2 text-sm outline-none focus:border-gold}
+.card{@apply rounded-2xl border border-beige bg-white p-5 shadow-sm}
+.th{@apply px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-charcoal/60}
+.td{@apply px-3 py-2 text-sm}}
+@media print{body *{visibility:hidden}#invoice,#invoice *{visibility:visible}#invoice{position:absolute;left:0;top:0;width:100%}}
+@keyframes marquee{to{transform:translateX(-50%)}}.marquee{animation:marquee 35s linear infinite}

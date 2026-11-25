@@ -1,0 +1,125 @@
+import {useState,useMemo} from 'react';import {Routes,Route} from 'react-router-dom';
+import {LayoutDashboard,Scissors,Receipt,UserPlus,Globe,CalendarDays,Tag,Users,BarChart3,CalendarCheck,IndianRupee,Clock,CheckCircle2,Printer,Trash2,Pencil,Plus} from 'lucide-react';
+import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell} from 'recharts';
+import {DashShell} from '../../components/layout/Layout';import {useApp} from '../../context/AppContext';import SlotPicker from '../../components/forms/SlotPicker';
+import {Modal,Confirm,Field,Stat,Badge,Table,Empty} from '../../components/common/ui';
+import {calculateServiceDuration,calculateTotalPrice,inr,fmt,iso,addDays,toMin} from '../../utils/appointments';
+const links=[['/admin','Dashboard',LayoutDashboard],['/admin/services','Services',Scissors],['/admin/billing','Billing',Receipt],['/admin/offline','Offline Booking',UserPlus],['/admin/online','Online Bookings',Globe],['/admin/appointments','Appointments',CalendarDays],['/admin/offers','Offers',Tag],['/admin/customers','Customers',Users],['/admin/reports','Reports',BarChart3]];
+const sortA=l=>[...l].sort((a,b)=>(b.date+b.start).localeCompare(a.date+a.start));
+const rev=(l)=>l.filter(a=>a.status==='Completed').reduce((s,a)=>s+a.total,0);
+const H=({t,children})=><div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-2xl">{t}</h1>{children}</div>;
+const GOLD='#C6A66B';
+const names=a=>a.services.map(s=>s.name).join(', ');
+
+function Overview(){
+  const {appointments:A,notifications}=useApp();const t=iso(new Date());
+  const today=A.filter(a=>a.date===t&&a.status!=='Cancelled');
+  const monthly=[...Array(6)].map((_,i)=>{const d=new Date();d.setMonth(d.getMonth()-5+i);const k=iso(d).slice(0,7);return {name:d.toLocaleString('en',{month:'short'}),revenue:rev(A.filter(a=>a.date.startsWith(k)))}});
+  const ph=A.filter(a=>a.status!=='Cancelled'&&a.payment==='Pending');
+  return <div className="space-y-6"><H t="Dashboard"/>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat icon={Users} label="Total customers" value={new Set(A.map(a=>a.customer.phone)).size}/><Stat icon={CalendarCheck} label="Today's appointments" value={today.length}/><Stat icon={Globe} label="Online bookings" value={A.filter(a=>a.type==='Online'&&a.status!=='Cancelled').length}/><Stat icon={UserPlus} label="Offline bookings" value={A.filter(a=>a.type==='Offline'&&a.status!=='Cancelled').length}/>
+      <Stat icon={IndianRupee} label="Today's revenue" value={inr(rev(A.filter(a=>a.date===t)))}/><Stat icon={Clock} label="Pending payments" value={`${ph.length} · ${inr(ph.reduce((s,a)=>s+a.total,0))}`}/><Stat icon={CheckCircle2} label="Completed" value={A.filter(a=>a.status==='Completed').length}/></div>
+    <div className="grid gap-6 lg:grid-cols-2"><div className="card"><h3 className="mb-3 text-lg">Monthly revenue</h3><div className="h-60"><ResponsiveContainer><BarChart data={monthly}><XAxis dataKey="name"/><YAxis/><Tooltip formatter={v=>inr(v)}/><Bar dataKey="revenue" fill={GOLD} radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div></div>
+      <div className="card"><h3 className="mb-3 text-lg">Recent activities</h3>{notifications.slice(0,6).map(n=><p key={n.id} className="border-b border-beige/60 py-2 text-sm">{n.msg}</p>)}{!notifications.length&&<Empty/>}</div></div>
+    <div className="card"><h3 className="mb-3 text-lg">Recent appointments</h3><Table heads={['Order','Customer','Date','Type','Status']}>{sortA(A).slice(0,6).map(a=><tr key={a.id}><td className="td">{a.id}</td><td className="td">{a.customer.name}</td><td className="td">{a.date} {fmt(a.start)}</td><td className="td"><Badge v={a.type}/></td><td className="td"><Badge v={a.status}/></td></tr>)}</Table></div></div>;
+}
+function Services(){
+  const {services,categories}=useApp();const [q,setQ]=useState('');const [c,setC]=useState('All');
+  const list=services.filter(s=>(c==='All'||s.category===c)&&(s.name+s.code).toLowerCase().includes(q.toLowerCase()));
+  return <div><H t="Services"><span className="rounded-full bg-beige px-3 py-1 text-xs">View only</span></H>
+    <div className="card mb-4 flex flex-wrap gap-3"><input className="input !w-56" placeholder="Search name or code" value={q} onChange={ev=>setQ(ev.target.value)}/><select className="input !w-48" value={c} onChange={ev=>setC(ev.target.value)}>{['All',...categories].map(x=><option key={x}>{x}</option>)}</select></div>
+    <div className="card"><Table heads={['Code','Service','Category','Price','Duration','Status']}>{list.map(s=><tr key={s.id}><td className="td font-medium">{s.code}</td><td className="td">{s.name}</td><td className="td">{s.category}</td><td className="td">{inr(s.price)}</td><td className="td">{s.duration} min</td><td className="td"><Badge v={s.active?'Confirmed':'Pending'}/> <span className="text-xs">{s.active?'Active':'Inactive'}</span></td></tr>)}</Table>{!list.length&&<Empty/>}
+    <p className="mt-3 text-xs text-charcoal/50">Admin has view-only access to services: adding, editing, deleting and price changes are not available. The service list is fixed in src/data/seed.js.</p></div></div>;
+}
+function Billing(){
+  const {services,bills,setBills,toast}=useApp();
+  const [code,setCode]=useState('');const [items,setItems]=useState([]);const [pct,setPct]=useState(0);const [e,setE]=useState({});const [inv,setInv]=useState(null);
+  const [c,setC]=useState({name:'',phone:'',order:'',date:iso(new Date()),pay:'Pending'});
+  const found=services.find(s=>s.code.toUpperCase()===code.trim().toUpperCase());
+  const add=()=>{if(!found)return toast('No service with that code');if(!found.active)return toast('Service is inactive');if(items.some(i=>i.code===found.code))return toast('Already added');setItems([...items,found]);setCode('')};
+  const sub=calculateTotalPrice(items),disc=Math.round(sub*(Number(pct)||0)/100);
+  const gen=()=>{const x={};if(c.name.trim().length<2)x.name='Required';if(!/^\d{10}$/.test(c.phone))x.phone='10 digits';if(!items.length)x.items='Add at least one service';if(pct<0||pct>100)x.pct='0-100';setE(x);if(Object.keys(x).length)return;
+    const b={invoice:`INV-${String(bills.length+1).padStart(4,'0')}`,order:c.order.trim()||`ORD-${Date.now().toString().slice(-6)}`,customer:c.name,phone:c.phone,date:c.date,pay:c.pay,method:'At Salon',items:items.map(({code,name,category,price,duration})=>({code,name,category,price,duration})),sub,disc,total:sub-disc};
+    setBills([b,...bills]);setInv(b);setItems([]);setPct(0)};
+  return <div><H t="Service Code Billing"/><div className="grid gap-6 lg:grid-cols-2">
+    <div className="card space-y-3"><h3 className="text-lg">Customer</h3><div className="grid gap-3 sm:grid-cols-2"><Field label="Name" error={e.name}><input className="input" value={c.name} onChange={ev=>setC({...c,name:ev.target.value})}/></Field><Field label="Phone" error={e.phone}><input className="input" value={c.phone} onChange={ev=>setC({...c,phone:ev.target.value})}/></Field>
+      <Field label="Customer Order ID"><input className="input" placeholder="Auto if empty" value={c.order} onChange={ev=>setC({...c,order:ev.target.value})}/></Field><Field label="Booking date"><input type="date" className="input" value={c.date} onChange={ev=>setC({...c,date:ev.target.value})}/></Field>
+      <Field label="Payment status"><select className="input" value={c.pay} onChange={ev=>setC({...c,pay:ev.target.value})}><option>Pending</option><option>Paid</option></select></Field><Field label="Payment method"><input className="input bg-beige/40" readOnly value="At Salon"/></Field></div></div>
+    <div className="card space-y-3"><h3 className="text-lg">Add by service code</h3><div className="flex gap-2"><input className="input" placeholder="e.g. H001" value={code} onChange={ev=>setCode(ev.target.value)} onKeyDown={ev=>ev.key==='Enter'&&add()}/><button className="btn-gold" onClick={add}>Add</button></div>
+      {found&&<p className="text-xs text-charcoal/60">{found.name} · {found.category} · {inr(found.price)} · {found.duration} min</p>}{e.items&&<p className="text-xs text-red-600">{e.items}</p>}
+      <Table heads={['Code','Service','Category','Duration','Price','']}>{items.map(i=><tr key={i.code}><td className="td">{i.code}</td><td className="td">{i.name}</td><td className="td">{i.category}</td><td className="td">{i.duration} min</td><td className="td">{inr(i.price)}</td><td className="td"><button onClick={()=>setItems(items.filter(x=>x.code!==i.code))}><Trash2 size={15}/></button></td></tr>)}</Table>
+      <p className="text-xs text-charcoal/50">Service details and prices are read-only in billing.</p>
+      <div className="flex items-center justify-between text-sm"><span>Discount %</span><input type="number" className="input !w-24" value={pct} onChange={ev=>setPct(ev.target.value)}/></div>{e.pct&&<p className="text-xs text-red-600">{e.pct}</p>}
+      <div className="space-y-1 border-t border-beige pt-2 text-sm"><p className="flex justify-between">Subtotal<span>{inr(sub)}</span></p><p className="flex justify-between">Discount<span>-{inr(disc)}</span></p><p className="flex justify-between text-lg font-semibold">Final total<span>{inr(sub-disc)}</span></p></div>
+      <button className="btn-gold w-full" onClick={gen}>Generate invoice</button></div></div>
+    {bills.length>0&&<div className="card mt-6"><h3 className="mb-2 text-lg">Past invoices</h3><Table heads={['Invoice','Customer','Date','Total','Payment','']}>{bills.map(b=><tr key={b.invoice}><td className="td">{b.invoice}</td><td className="td">{b.customer}</td><td className="td">{b.date}</td><td className="td">{inr(b.total)}</td><td className="td"><Badge v={b.pay}/></td><td className="td"><button className="text-xs underline" onClick={()=>setInv(b)}>View</button></td></tr>)}</Table></div>}
+    {inv&&<Modal wide title="Invoice" onClose={()=>setInv(null)}><div id="invoice" className="p-2 text-sm"><div className="mb-4 flex justify-between border-b border-beige pb-3"><div><h2 className="text-2xl">Shoba Salon & Spa</h2><p className="text-xs">Beauty, Elegance & Confidence</p></div><div className="text-right text-xs"><p><b>{inv.invoice}</b></p><p>Order: {inv.order}</p><p>Date: {inv.date}</p></div></div>
+      <p>Customer: <b>{inv.customer}</b> · {inv.phone}</p><div className="my-3"><Table heads={['Code','Service','Duration','Price']}>{inv.items.map(i=><tr key={i.code}><td className="td">{i.code}</td><td className="td">{i.name}</td><td className="td">{i.duration} min</td><td className="td">{inr(i.price)}</td></tr>)}</Table></div>
+      <div className="ml-auto w-56 space-y-1"><p className="flex justify-between">Subtotal<span>{inr(inv.sub)}</span></p><p className="flex justify-between">Discount<span>-{inr(inv.disc)}</span></p><p className="flex justify-between font-semibold">Total<span>{inr(inv.total)}</span></p></div><p className="mt-3 text-xs">Payment: {inv.pay} ({inv.method})</p></div>
+      <button className="btn-gold mt-4 w-full" onClick={()=>window.print()}><Printer size={16}/>Print invoice</button></Modal>}</div>;
+}
+function Offline(){
+  const {services,book,toast}=useApp();const active=services.filter(s=>s.active);
+  const [sel,setSel]=useState([]);const [date,setDate]=useState(iso(new Date()));const [start,setStart]=useState('');const [f,setF]=useState({name:'',phone:'',notes:''});const [e,setE]=useState({});const [done,setDone]=useState(null);
+  const chosen=active.filter(s=>sel.includes(s.code));const dur=calculateServiceDuration(chosen);
+  const save=()=>{const x={};if(f.name.trim().length<2)x.name='Required';if(!/^\d{10}$/.test(f.phone))x.phone='10 digits';if(!chosen.length)x.services='Select services';if(!start)x.start='Choose a slot';setE(x);if(Object.keys(x).length)return;
+    try{setDone(book({type:'Offline',customer:{name:f.name.trim(),phone:f.phone,email:''},date,start,services:chosen,notes:f.notes}));setSel([]);setStart('');setF({name:'',phone:'',notes:''})}catch(er){toast(er.message)}};
+  return <div><H t="Offline (Walk-in) Booking"/><div className="grid gap-6 lg:grid-cols-2"><div className="card space-y-3"><div className="grid gap-3 sm:grid-cols-2"><Field label="Customer name" error={e.name}><input className="input" value={f.name} onChange={ev=>setF({...f,name:ev.target.value})}/></Field><Field label="Phone" error={e.phone}><input className="input" value={f.phone} onChange={ev=>setF({...f,phone:ev.target.value})}/></Field></div>
+    <p className="text-sm font-medium">Services {e.services&&<span className="text-xs text-red-600">({e.services})</span>}</p><div className="grid gap-1">{active.map(s=><label key={s.id} className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-[#C6A66B]" checked={sel.includes(s.code)} onChange={()=>setSel(l=>l.includes(s.code)?l.filter(c=>c!==s.code):[...l,s.code])}/>{s.code} · {s.name} · {inr(s.price)} · {s.duration} min</label>)}</div>
+    <p className="text-sm">Total price <b>{inr(calculateTotalPrice(chosen))}</b> · Total duration <b>{dur} min</b></p><Field label="Booking notes"><textarea rows={2} className="input" value={f.notes} onChange={ev=>setF({...f,notes:ev.target.value})}/></Field></div>
+    <div className="card space-y-3"><h3 className="text-lg">Date & start time</h3><SlotPicker date={date} setDate={setDate} duration={dur} start={start} setStart={setStart}/>{e.start&&<p className="text-xs text-red-600">{e.start}</p>}{start&&<p className="text-sm">{fmt(start)} – {fmt(toMin(start)+dur)}</p>}<button className="btn-gold w-full" onClick={save}>Save booking</button></div></div>
+    {done&&<Modal title="Walk-in booking saved" onClose={()=>setDone(null)}><p className="text-sm">Order ID <b>{done.id}</b><br/>{done.date} · {fmt(done.start)}–{fmt(done.end)}<br/>The slot is now blocked for clients.</p></Modal>}</div>;
+}
+function Online(){
+  const {appointments,setStatus,setPayment}=useApp();const [v,setV]=useState(null);const list=sortA(appointments.filter(a=>a.type==='Online'));
+  const cur=v&&appointments.find(a=>a.id===v);
+  return <div><H t="Online Booking Management"/><div className="card">{list.length?<Table heads={['Order','Customer','Date & time','Total','Status','Actions']}>{list.map(a=><tr key={a.id}><td className="td">{a.id}</td><td className="td">{a.customer.name}</td><td className="td">{a.date} {fmt(a.start)}</td><td className="td">{inr(a.total)}</td><td className="td"><Badge v={a.status}/></td>
+    <td className="td whitespace-nowrap text-xs"><button className="mr-2 underline" onClick={()=>setV(a.id)}>View</button>{a.status==='Pending'&&<button className="mr-2 text-blue-700 underline" onClick={()=>setStatus(a.id,'Confirmed')}>Confirm</button>}{['Pending','Confirmed'].includes(a.status)&&<><button className="mr-2 text-green-700 underline" onClick={()=>setStatus(a.id,'Completed')}>Complete</button><button className="text-red-600 underline" onClick={()=>setStatus(a.id,'Cancelled')}>Cancel</button></>}</td></tr>)}</Table>:<Empty/>}</div>
+    {cur&&<Modal title={cur.id} onClose={()=>setV(null)}><div className="space-y-1 text-sm"><p>{cur.customer.name} · {cur.customer.phone} · {cur.customer.email}</p><p>{cur.date} · {fmt(cur.start)}–{fmt(cur.end)} ({cur.duration} min)</p>{cur.services.map(s=><p key={s.code}>{s.code} {s.name} – {inr(s.price)}</p>)}<p className="font-semibold">Total {inr(cur.total)}</p><p>Status <Badge v={cur.status}/> Payment <Badge v={cur.payment}/></p>{cur.notes&&<p>Notes: {cur.notes}</p>}</div>
+      {cur.status!=='Cancelled'&&<button className="btn-out mt-3" onClick={()=>setPayment(cur.id,cur.payment==='Paid'?'Pending':'Paid')}>Mark payment {cur.payment==='Paid'?'Pending':'Paid'}</button>}</Modal>}</div>;
+}
+function Appts(){
+  const {appointments:A,setStatus}=useApp();const [view,setView]=useState('list');const [date,setDate]=useState(iso(new Date()));
+  const on=d=>A.filter(a=>a.date===d).sort((a,b)=>a.start.localeCompare(b.start));
+  const Row=({a})=><div className="mb-1 rounded-lg border border-beige bg-white p-2 text-xs"><div className="flex flex-wrap items-center gap-1"><b>{fmt(a.start)}–{fmt(a.end)}</b><Badge v={a.type}/><Badge v={a.status}/></div><div>{a.customer.name} · {names(a)}</div>{a.status==='Pending'&&<button className="mt-1 text-blue-700 underline" onClick={()=>setStatus(a.id,'Confirmed')}>Confirm</button>}</div>;
+  const wk=useMemo(()=>{const d=new Date(date+'T00:00');const s=addDays(d,-d.getDay());return [...Array(7)].map((_,i)=>iso(addDays(s,i)))},[date]);
+  const d0=new Date(date+'T00:00');const first=new Date(d0.getFullYear(),d0.getMonth(),1);const dim=new Date(d0.getFullYear(),d0.getMonth()+1,0).getDate();
+  const cells=[...Array(first.getDay()).fill(null),...Array(dim)].map((_,i)=>i<first.getDay()?null:iso(new Date(d0.getFullYear(),d0.getMonth(),i-first.getDay()+1)));
+  return <div><H t="Appointments"><div className="flex flex-wrap gap-2"><input type="date" className="input !w-40" value={date} onChange={ev=>setDate(ev.target.value)}/>{['list','daily','weekly','calendar'].map(v=><button key={v} className={view===v?'btn-gold':'btn-out'} onClick={()=>setView(v)}>{v[0].toUpperCase()+v.slice(1)}</button>)}</div></H>
+    {view==='list'&&<div className="card"><Table heads={['Order','Customer','Date & time','Services','Type','Status']}>{sortA(A).map(a=><tr key={a.id}><td className="td">{a.id}</td><td className="td">{a.customer.name}</td><td className="td">{a.date} {fmt(a.start)}</td><td className="td">{names(a)}</td><td className="td"><Badge v={a.type}/></td><td className="td"><Badge v={a.status}/></td></tr>)}</Table></div>}
+    {view==='daily'&&<div className="card"><h3 className="mb-2 text-lg">{date}</h3>{on(date).length?on(date).map(a=><Row key={a.id} a={a}/>):<Empty>No appointments on this day.</Empty>}</div>}
+    {view==='weekly'&&<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">{wk.map(d=><div key={d} className="card !p-2"><p className="mb-2 text-xs font-semibold">{new Date(d+'T00:00').toLocaleDateString('en',{weekday:'short',day:'numeric'})}</p>{on(d).map(a=><Row key={a.id} a={a}/>)}</div>)}</div>}
+    {view==='calendar'&&<div className="card"><h3 className="mb-3 text-lg">{d0.toLocaleString('en',{month:'long',year:'numeric'})}</h3><div className="grid grid-cols-7 gap-1 text-center text-xs">{['S','M','T','W','T','F','S'].map((x,i)=><b key={i}>{x}</b>)}{cells.map((d,i)=>d?<button key={i} onClick={()=>{setDate(d);setView('daily')}} className={`rounded-lg border p-2 ${d===iso(new Date())?'border-gold':'border-beige'}`}>{Number(d.slice(8))}{on(d).length>0&&<span className="mt-1 block rounded bg-gold/20 text-[10px]">{on(d).length} appt</span>}</button>:<span key={i}/>)}</div></div>}</div>;
+}
+function Offers(){
+  const {offers,setOffers,today,toast}=useApp();const [m,setM]=useState(null);const [e,setE]=useState({});const [del,setDel]=useState(null);
+  const save=()=>{const x={};if(!m.title.trim())x.title='Required';if(!(m.discount>0&&m.discount<=100))x.discount='1-100';if(!m.validTo)x.validTo='Required';setE(x);if(Object.keys(x).length)return;
+    const r={...m,discount:Number(m.discount)};setOffers(l=>m.id?l.map(o=>o.id===m.id?r:o):[...l,{...r,id:'o'+Date.now()}]);setM(null);toast('Offer saved')};
+  const set=k=>({value:m?.[k]??'',onChange:ev=>setM({...m,[k]:ev.target.value}),className:'input'});
+  return <div><H t="Offers Management"><button className="btn-gold" onClick={()=>{setM({title:'',discount:'',validTo:'',description:'',active:true});setE({})}}><Plus size={16}/>Add offer</button></H>
+    <div className="card"><Table heads={['Title','Discount','Valid until','Active','State','']}>{offers.map(o=><tr key={o.id}><td className="td">{o.title}</td><td className="td">{o.discount}%</td><td className="td">{o.validTo}</td><td className="td"><input type="checkbox" className="accent-[#C6A66B]" checked={o.active} onChange={()=>setOffers(l=>l.map(x=>x.id===o.id?{...x,active:!x.active}:x))}/></td><td className="td"><Badge v={o.validTo<today?'Cancelled':o.active?'Confirmed':'Pending'}/> <span className="text-xs">{o.validTo<today?'Expired':o.active?'Live':'Inactive'}</span></td>
+      <td className="td whitespace-nowrap"><button className="mr-3" onClick={()=>{setM(o);setE({})}}><Pencil size={16}/></button><button onClick={()=>setDel(o)}><Trash2 size={16}/></button></td></tr>)}</Table></div>
+    {m&&<Modal title={m.id?'Edit offer':'Add offer'} onClose={()=>setM(null)}><div className="space-y-3"><Field label="Title" error={e.title}><input {...set('title')}/></Field><Field label="Discount %" error={e.discount}><input type="number" {...set('discount')}/></Field><Field label="Valid until" error={e.validTo}><input type="date" {...set('validTo')}/></Field><Field label="Description"><textarea rows={2} {...set('description')}/></Field><label className="flex gap-2 text-sm"><input type="checkbox" checked={m.active} onChange={ev=>setM({...m,active:ev.target.checked})}/>Active</label><button className="btn-gold w-full" onClick={save}>Save</button></div></Modal>}
+    {del&&<Confirm msg={`Delete "${del.title}"?`} onNo={()=>setDel(null)} onYes={()=>{setOffers(l=>l.filter(o=>o.id!==del.id));setDel(null)}}/>}</div>;
+}
+function Customers(){
+  const {appointments:A}=useApp();const [v,setV]=useState(null);
+  const cs=useMemo(()=>{const m={};A.forEach(a=>{const k=a.customer.phone;m[k]=m[k]||{phone:k,name:a.customer.name,email:'',list:[]};if(a.customer.email)m[k].email=a.customer.email;m[k].list.push(a)});return Object.values(m)},[A]);
+  return <div><H t="Customers"/><div className="card"><Table heads={['Name','Phone','Email','Appointments','Total spending','']}>{cs.map(c=><tr key={c.phone}><td className="td">{c.name}</td><td className="td">{c.phone}</td><td className="td">{c.email||'—'}</td><td className="td">{c.list.length}</td><td className="td">{inr(rev(c.list))}</td><td className="td"><button className="text-xs underline" onClick={()=>setV(c)}>History</button></td></tr>)}</Table></div>
+    {v&&<Modal title={`${v.name} – history`} onClose={()=>setV(null)}>{sortA(v.list).map(a=><p key={a.id} className="border-b border-beige/60 py-2 text-sm">{a.date} · {names(a)} · {inr(a.total)} <Badge v={a.status}/></p>)}</Modal>}</div>;
+}
+function Reports(){
+  const {appointments:A}=useApp();const [r,setR]=useState('daily');const now=new Date();
+  const data=useMemo(()=>{
+    if(r==='daily')return [...Array(7)].map((_,i)=>{const d=iso(addDays(now,i-6));const l=A.filter(a=>a.date===d&&a.status==='Completed');return {name:d.slice(5),revenue:rev(l),count:l.length}});
+    if(r==='weekly')return [...Array(4)].map((_,i)=>{const s=iso(addDays(now,-(27-i*7))),e=iso(addDays(now,-(21-i*7)));const l=A.filter(a=>a.date>=s&&a.date<e&&a.status==='Completed');return {name:`Wk ${i+1}`,revenue:rev(l),count:l.length}});
+    if(r==='monthly')return [...Array(6)].map((_,i)=>{const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);const l=A.filter(a=>a.date.startsWith(iso(d).slice(0,7))&&a.status==='Completed');return {name:d.toLocaleString('en',{month:'short'}),revenue:rev(l),count:l.length}});
+    if(r==='booking')return ['Online','Offline'].map(t=>{const l=A.filter(a=>a.type===t&&a.status!=='Cancelled');return {name:t,revenue:rev(l),count:l.length}});
+    const m={};A.filter(a=>a.status==='Completed').forEach(a=>a.services.forEach(s=>{m[s.name]=m[s.name]||{name:s.name,revenue:0,count:0};m[s.name].revenue+=s.price;m[s.name].count++}));return Object.values(m);
+  },[A,r]);
+  const T=[['daily','Daily sales'],['weekly','Weekly sales'],['monthly','Monthly sales'],['booking','Online vs offline'],['service','Service-wise revenue']];
+  return <div><H t="Reports"/><div className="mb-4 flex flex-wrap gap-2">{T.map(([k,l])=><button key={k} className={r===k?'btn-gold':'btn-out'} onClick={()=>setR(k)}>{l}</button>)}</div>
+    <div className="grid gap-6 lg:grid-cols-2"><div className="card h-80"><ResponsiveContainer>{r==='booking'?<PieChart><Pie data={data} dataKey="count" nameKey="name" outerRadius={100} label>{data.map((_,i)=><Cell key={i} fill={[GOLD,'#252525'][i]}/>)}</Pie><Tooltip/></PieChart>:<BarChart data={data}><XAxis dataKey="name"/><YAxis/><Tooltip formatter={(v,n)=>n==='revenue'?inr(v):v}/><Bar dataKey="revenue" fill={GOLD} radius={[6,6,0,0]}/></BarChart>}</ResponsiveContainer></div>
+      <div className="card"><Table heads={['Period / item','Bookings','Revenue']}>{data.map(d=><tr key={d.name}><td className="td">{d.name}</td><td className="td">{d.count}</td><td className="td">{inr(d.revenue)}</td></tr>)}</Table><p className="mt-2 text-xs text-charcoal/50">Revenue counts completed appointments (booking report counts all non-cancelled bookings).</p></div></div></div>;
+}
+export default function Admin(){return <DashShell title="Admin" links={links} bell><Routes><Route index element={<Overview/>}/><Route path="services" element={<Services/>}/><Route path="billing" element={<Billing/>}/><Route path="offline" element={<Offline/>}/><Route path="online" element={<Online/>}/><Route path="appointments" element={<Appts/>}/><Route path="offers" element={<Offers/>}/><Route path="customers" element={<Customers/>}/><Route path="reports" element={<Reports/>}/></Routes></DashShell>}
